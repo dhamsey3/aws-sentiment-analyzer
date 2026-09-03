@@ -9,6 +9,7 @@ terraform/backend.tf.local
 
 # Lambda artifacts
 terraform/lambda/*.zip
+terraform/lambda/build/
 
 # Python artifacts and build metadata
 **/__pycache__/

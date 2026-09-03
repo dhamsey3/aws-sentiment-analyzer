@@ -19,14 +19,14 @@ output "sentiment_analyzer_lambda_arn" {
 output "lambda_function_names" {
   description = "The names of the Lambda functions"
   value = {
-    reddit_collector    = aws_lambda_function.reddit_collector.function_name
-    sentiment_analyzer  = aws_lambda_function.sentiment_analyzer.function_name
+    reddit_collector   = aws_lambda_function.reddit_collector.function_name
+    sentiment_analyzer = aws_lambda_function.sentiment_analyzer.function_name
   }
 }
 
-output "comprehend_classifier_arn" {
-  description = "The ARN of the Comprehend document classifier"
-  value       = aws_comprehend_document_classifier.custom_classifier.arn
+output "alerts_topic_arn" {
+  description = "The ARN of the SNS topic used for pipeline failure alerts"
+  value       = aws_sns_topic.alerts.arn
 }
 
 output "quicksight_data_source_arn" {

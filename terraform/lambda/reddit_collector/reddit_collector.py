@@ -4,52 +4,44 @@ import json
 import os
 from datetime import datetime
 
-# Set up Reddit API connection
 reddit = praw.Reddit(
     client_id=os.environ['REDDIT_CLIENT_ID'],
     client_secret=os.environ['REDDIT_CLIENT_SECRET'],
-    user_agent="MyAPI/0.0.1"
+    user_agent="aws-sentiment-analyzer/1.0 (reddit_collector lambda)"
 )
 
-# Set up AWS S3 client
 s3 = boto3.client('s3')
+
+SUBREDDIT = os.environ.get('SUBREDDIT', 'technology')
+POST_LIMIT = int(os.environ.get('POST_LIMIT', '100'))
 
 
 def lambda_handler(event, context):
-    # Define the subreddit to collect data from
-    subreddit = reddit.subreddit('technology')
-    hot_posts = subreddit.hot(limit=100)
-    
-    # Prepare a list to hold processed posts
-    posts = []
+    subreddit = reddit.subreddit(SUBREDDIT)
+    hot_posts = subreddit.hot(limit=POST_LIMIT)
 
+    posts = []
     for post in hot_posts:
-        # Combine the title and the body text (selftext)
-        post_text = post.title + " " + post.selftext
-        
-        # Placeholder label (adjust as needed)
-        label = "neutral"  # You can replace this with actual labels later
-        
-        # Append the post text and label to the list
         posts.append({
-            'text': post_text,  # The content of the post
-            'label': label      # Placeholder label
+            'id': post.id,
+            'subreddit': SUBREDDIT,
+            'text': (post.title + " " + post.selftext).strip(),
+            'created_utc': post.created_utc,
+            'score': post.score,
+            'num_comments': post.num_comments,
+            'permalink': post.permalink,
         })
-    
-    # Create a filename with the current timestamp
-    filename = (
-        f"reddit_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    )
-    
-    # Save the file to S3 in the desired bucket
+
+    filename = f"reddit_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
     s3.put_object(
         Bucket=os.environ['S3_BUCKET'],
         Key=f"raw_data/reddit/{filename}",
-        Body=json.dumps(posts)  # Convert the list of posts to JSON format
+        Body=json.dumps(posts),
+        ContentType='application/json',
     )
-    
-    # Return a success message with the number of posts collected
+
     return {
         'statusCode': 200,
-        'body': json.dumps(f'Collected {len(posts)} posts from Reddit')
+        'body': json.dumps(f'Collected {len(posts)} posts from r/{SUBREDDIT}')
     }

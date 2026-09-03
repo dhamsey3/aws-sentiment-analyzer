@@ -7,15 +7,16 @@ security section and do not commit secrets to the repository.
 # AWS Sentiment Analysis Pipeline
 
 A Terraform + AWS Lambda pipeline that collects Reddit data, processes it,
-and runs sentiment analysis using Amazon Comprehend. This repository contains
+and scores sentiment using a local VADER lexicon. This repository contains
 infrastructure (Terraform) and Lambda code used for data collection,
 processing, and basic visualization with QuickSight.
 
 ## Quick highlights
-- Data collection: Reddit (PRAW) and optional Amazon Reviews dataset
+- Data collection: Reddit (PRAW)
 - Processing: AWS Lambda functions
-- Analysis: Amazon Comprehend (document classifier & DetectSentiment)
+- Analysis: VADER sentiment scoring (positive/neutral/negative + compound score), run inside the `sentiment_analyzer` Lambda — no training data required
 - Storage: S3 (raw and processed buckets)
+- Alerting: CloudWatch alarms on Lambda errors, notified via SNS email
 - IaC: Terraform
 
 ---
@@ -25,7 +26,7 @@ processing, and basic visualization with QuickSight.
 1. Clone the repo:
 
 ```bash
-git clone git@github.com:AmazonCloudHub-aws/aws-sentiment-analyzer.git
+git clone git@github.com:dhamsey3/aws-sentiment-analyzer.git
 cd aws-sentiment-analyzer
 ```
 
@@ -34,7 +35,9 @@ cd aws-sentiment-analyzer
 - Create `terraform/backend.tf.local` with your S3/DynamoDB backend (see `terraform/backend.tf`).
 - Store Reddit credentials in AWS Secrets Manager or pass them via your CI environment.
 
-3. Produce lambda artifacts (locally or in CI):
+3. Produce lambda artifacts (locally or in CI). This installs each function's
+   `requirements.txt` into a scratch build directory and zips it — nothing
+   gets installed into or committed from the source folders:
 
 ```bash
 ./deploy_lambdas.sh
@@ -108,33 +111,39 @@ flowchart TD
 	end
 
 	subgraph Processing[Processing]
-		SA[Lambda: sentiment_analyzer]
-		Comprehend[Amazon Comprehend]
+		SA["Lambda: sentiment_analyzer (VADER)"]
 	end
 
 	subgraph Analytics[Analytics]
 		QuickSight[Amazon QuickSight]
 	end
 
+	subgraph Alerting[Alerting]
+		Alarm[CloudWatch Alarm: Lambda Errors]
+		SNS[Amazon SNS]
+	end
+
 	Reddit -->|pull posts| RC
 	Reviews -->|ingest files| RC
 	RC -->|upload| RawBucket
 	RawBucket -->|s3:ObjectCreated| SA
-	SA -->|call| Comprehend
 	SA -->|store results| ProcessedBucket
 	ProcessedBucket --> QuickSight
+	RC -.->|on error| Alarm
+	SA -.->|on error| Alarm
+	Alarm -->|notify| SNS
+	SNS -->|email| Notify["notification_email"]
 
 	classDef awsService fill:#FFEDD5,stroke:#E66A00,stroke-width:1px;
-	class RC,SA,Comprehend,QuickSight awsService;
+	class RC,SA,QuickSight,Alarm,SNS awsService;
 ```
 
 ---
 
 ## Next steps / TODO
 
-- Remove vendored libraries from `terraform/lambda/` and adopt CI packaging
-- Add GitHub Actions that build lambdas, run `terraform fmt`/`validate`, and plan in a non-prod account
 - Move secrets into Secrets Manager or Parameter Store and reference them from Terraform
+- Deduplicate Reddit posts across daily collection runs (currently re-scores whatever is "hot" that day, which can overlap with prior runs)
 
 ### Artifact bucket & IAM
 

@@ -10,10 +10,12 @@ variable "project_name" {
 
 variable "reddit_client_id" {
   description = "Reddit API Client ID"
+  sensitive   = true
 }
 
 variable "reddit_client_secret" {
   description = "Reddit API Client Secret"
+  sensitive   = true
 }
 
 

@@ -5,14 +5,22 @@ import json
 import os
 from datetime import datetime
 
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
 s3 = boto3.client('s3')
+analyzer = SentimentIntensityAnalyzer()
+
+POSITIVE_THRESHOLD = 0.05
+NEGATIVE_THRESHOLD = -0.05
 
 
 def get_latest_file(bucket, prefix):
     try:
         files = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
         if 'Contents' not in files or not files['Contents']:
-            raise ValueError(f"No files found in bucket {bucket} with prefix {prefix}")
+            raise ValueError(
+                f"No files found in bucket {bucket} with prefix {prefix}"
+            )
         return max(files['Contents'], key=lambda x: x['LastModified'])
     except Exception as e:
         print(f"Error in get_latest_file: {str(e)}")
@@ -30,44 +38,57 @@ def get_file_content(bucket, key):
         raise
 
 
-def save_comprehend_format(bucket, data):
-    try:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"comprehend_training_data_{timestamp}.csv"
-        key = f"processed_data/{filename}"
+def classify(compound):
+    if compound >= POSITIVE_THRESHOLD:
+        return "positive"
+    if compound <= NEGATIVE_THRESHOLD:
+        return "negative"
+    return "neutral"
 
-        # Create CSV in memory
-        output = io.StringIO()
-        writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
-        
-        # Write header - EXACTLY these two columns for Comprehend
-        writer.writerow(['label', 'text'])
-        
-        # Write data rows
-        for entry in data:
-            # Ensure text doesn't contain newlines or other problematic characters
-            cleaned_text = entry.get('text', '').replace('\n', ' ').replace('\r', ' ').strip()
-            label = entry.get('label', '').strip()
-            
-            # Skip empty entries
-            if not cleaned_text or not label:
-                continue
-                
-            writer.writerow([label, cleaned_text])
 
-        # Upload to S3
-        s3.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=output.getvalue(),
-            ContentType='text/csv'
-        )
-        print(f"Successfully saved Comprehend training data to {key}")
-        return key
-        
-    except Exception as e:
-        print(f"Error saving Comprehend format: {str(e)}")
-        raise
+def score_entries(data):
+    scored = []
+    for entry in data:
+        text = entry.get('text', '')
+        text = text.replace('\n', ' ').replace('\r', ' ').strip()
+        if not text:
+            continue
+
+        scores = analyzer.polarity_scores(text)
+        scored.append({
+            'id': entry.get('id', ''),
+            'text': text,
+            'compound': scores['compound'],
+            'positive': scores['pos'],
+            'neutral': scores['neu'],
+            'negative': scores['neg'],
+            'label': classify(scores['compound']),
+            'created_utc': entry.get('created_utc', ''),
+        })
+    return scored
+
+
+def save_results(bucket, scored):
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    key = f"processed_data/sentiment_{timestamp}.csv"
+
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(['id', 'label', 'compound', 'positive', 'neutral', 'negative', 'created_utc', 'text'])
+    for entry in scored:
+        writer.writerow([
+            entry['id'], entry['label'], entry['compound'], entry['positive'],
+            entry['neutral'], entry['negative'], entry['created_utc'], entry['text'],
+        ])
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=output.getvalue(),
+        ContentType='text/csv',
+    )
+    print(f"Successfully saved sentiment results to {key}")
+    return key
 
 
 def lambda_handler(event, context):
@@ -75,24 +96,22 @@ def lambda_handler(event, context):
         bucket = os.environ['S3_BUCKET']
         print(f"Starting processing for bucket: {bucket}")
 
-        # Get latest Reddit data
         reddit_prefix = 'raw_data/reddit/'
         latest_reddit_file = get_latest_file(bucket, reddit_prefix)
         reddit_data = get_file_content(bucket, latest_reddit_file['Key'])
 
-        # Validate data structure
         if not isinstance(reddit_data, list):
             raise ValueError("Input data must be a list of objects")
 
-        # Save in Comprehend format
-        output_key = save_comprehend_format(bucket, reddit_data)
+        scored = score_entries(reddit_data)
+        output_key = save_results(bucket, scored)
 
         return {
             'statusCode': 200,
             'body': json.dumps({
-                'message': 'Data processed successfully for Comprehend',
+                'message': 'Sentiment analysis complete',
                 'output_file': output_key,
-                'entries_processed': len(reddit_data)
+                'entries_processed': len(scored),
             })
         }
 
@@ -102,6 +121,7 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': json.dumps({
                 'error': str(e),
-                'message': 'Error processing data for Comprehend'
+                'message': 'Error processing sentiment data',
             })
         }
+
